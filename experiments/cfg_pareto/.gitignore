@@ -1,0 +1,4 @@
+outputs/
+figures/
+scores.csv
+*.log
