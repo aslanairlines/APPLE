@@ -24,27 +24,49 @@ def nondominated(rows: pd.DataFrame) -> list[bool]:
             for i in range(len(rows))]
 
 
-def main():
-    args = parse_args()
-    data = pd.read_csv(args.scores)
+def summarize(data: pd.DataFrame) -> pd.DataFrame:
+    data = data.copy()
     required = {"stage", "id_guidance_scale", "id_weight", "pair_id", "success", "id_similarity", "landmark_error"}
     if missing := required.difference(data.columns):
         raise SystemExit(f"Missing CSV columns: {sorted(missing)}")
     data["success"] = data["success"].astype(str).str.lower().eq("true")
-    valid = data[data["success"]].dropna(subset=["id_similarity", "landmark_error"])
+    group_cols = ["stage", "id_guidance_scale", "id_weight"]
+    if data.duplicated(group_cols + ["pair_id"]).any():
+        raise SystemExit("Duplicate pair observations in a setting; do not mix runs/seeds")
+    if data[group_cols + ["pair_id"]].isna().any().any():
+        raise SystemExit("Missing sweep setting or pair ID")
+    for column in ["id_similarity", "landmark_error"]:
+        data[column] = pd.to_numeric(data[column], errors="coerce")
+    valid = data[data["success"] & np.isfinite(data["id_similarity"]) & np.isfinite(data["landmark_error"])]
     if valid.empty:
         raise SystemExit("No valid results: check evaluate.py error column")
-    group_cols = ["stage", "id_guidance_scale", "id_weight"]
+    pair_sets = list(data.groupby(group_cols)["pair_id"].agg(set))
+    if any(pair_ids != pair_sets[0] for pair_ids in pair_sets[1:]):
+        raise SystemExit("Settings contain different generated pair sets; evaluate the same pairs")
+    valid_sets = {key: set(part["pair_id"]) for key, part in valid.groupby(group_cols)}
+    common = set.intersection(*(valid_sets.get(key, set()) for key in data.groupby(group_cols).groups))
+    if not common:
+        raise SystemExit("No common successful pairs across all settings; inspect detection failures")
+    paired = valid[valid["pair_id"].isin(common)]
+    print(f"Comparing {len(common)}/{len(pair_sets[0])} common successful pairs across all settings")
     count_all = data.groupby(group_cols).size().rename("n_generated")
-    summary = (valid.groupby(group_cols)
+    count_detected = valid.groupby(group_cols).size().rename("n_detected")
+    summary = (paired.groupby(group_cols)
                .agg(id_similarity=("id_similarity", "mean"),
                     landmark_error=("landmark_error", "mean"),
                     n_valid=("pair_id", "nunique"),
                     id_std=("id_similarity", "std"),
                     landmark_std=("landmark_error", "std"))
-               .join(count_all).reset_index())
-    summary["detection_success_rate"] = summary["n_valid"] / summary["n_generated"]
+               .join(count_all).join(count_detected).reset_index())
+    summary["detection_success_rate"] = summary["n_detected"] / summary["n_generated"]
     summary["pareto"] = nondominated(summary)
+    return summary
+
+
+def main():
+    args = parse_args()
+    data = pd.read_csv(args.scores, dtype={"pair_id": str})
+    summary = summarize(data)
     args.out_dir.mkdir(parents=True, exist_ok=True)
     summary_path = args.out_dir / "summary.csv"
     summary.to_csv(summary_path, index=False)

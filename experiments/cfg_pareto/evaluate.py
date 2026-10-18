@@ -12,7 +12,6 @@ import csv
 import json
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 
@@ -23,13 +22,20 @@ def parse_args():
     p.add_argument("--scores", type=Path, default=Path(__file__).resolve().parent / "scores.csv")
     p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     p.add_argument("--det-size", type=int, default=640)
+    p.add_argument("--run-names", nargs="+", help="Score only these run directories; otherwise all completed runs")
     return p.parse_args()
 
 
-def embedding(model, image_path: Path):
+def read_bgr(image_path: Path):
+    import cv2
     bgr = cv2.imread(str(image_path))
     if bgr is None:
         raise FileNotFoundError(image_path)
+    return bgr
+
+
+def embedding(model, image_path: Path):
+    bgr = read_bgr(image_path)
     faces = model.get(bgr)
     if not faces:
         return None
@@ -39,10 +45,12 @@ def embedding(model, image_path: Path):
 
 
 def landmarks(model, image_path: Path):
-    bgr = cv2.imread(str(image_path))
-    if bgr is None:
-        raise FileNotFoundError(image_path)
-    pred = model.get_landmarks_from_image(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    # Inference resizes the target to 512x512. Detect landmarks in that same
+    # coordinate system, including when the original FFHQ JPEG is 1024x1024.
+    from PIL import Image
+    with Image.open(image_path) as image:
+        rgb = np.array(image.convert("RGB").resize((512, 512)))
+    pred = model.get_landmarks_from_image(rgb)
     if not pred:
         return None
     return np.asarray(pred[0], dtype=np.float32)
@@ -58,8 +66,56 @@ def pose_expression_proxy(pred: np.ndarray, target: np.ndarray) -> float:
     return float(np.linalg.norm(pred - target, axis=1).mean() / scale)
 
 
+def collect_runs(output_root: Path, ffhq_base: Path, run_names=None):
+    if run_names and any(Path(name).name != name for name in run_names):
+        raise SystemExit("run-names must be directory names, not paths")
+    manifests = ([output_root / name / "manifest.json" for name in run_names]
+                 if run_names else sorted(output_root.glob("*/manifest.json")))
+    if not manifests:
+        raise SystemExit(f"No run manifests in {output_root}")
+    runs, reference, settings = [], None, set()
+    context_keys = ["checkpoint", "checkpoint_size", "checkpoint_mtime_ns", "model_id",
+                    "num_steps", "seed", "condition_type", "inference_sha256"]
+    for manifest_file in manifests:
+        if not manifest_file.is_file():
+            raise SystemExit(f"Missing requested manifest: {manifest_file}")
+        meta = json.loads(manifest_file.read_text(encoding="utf-8"))
+        if meta.get("status") != "complete":
+            if run_names:
+                raise SystemExit(f"Requested run is unfinished: {manifest_file}")
+            print(f"Skipping unfinished run: {manifest_file}")
+            continue
+        if Path(meta["ffhq_base"]).resolve() != ffhq_base.resolve():
+            raise SystemExit(f"Evaluation dataset differs from run dataset: {manifest_file}")
+        source_images = sorted((ffhq_base / "src").glob("*.jpg"))
+        if meta["max_pairs"] > 0:
+            source_images = source_images[:meta["max_pairs"]]
+        expected = {image.stem for image in source_images}
+        if not expected or ("pair_ids" in meta and set(meta["pair_ids"]) != expected):
+            raise SystemExit(f"Dataset pair list changed or is empty: {manifest_file}")
+        images = sorted((manifest_file.parent / "images").glob("*.png"))
+        if {image.stem for image in images} != expected:
+            raise SystemExit(f"Missing or unexpected generated pairs: {manifest_file}")
+        context = {key: meta.get(key) for key in context_keys}
+        context["pair_ids"] = sorted(expected)
+        if reference is not None and context != reference:
+            changed = [key for key in context if context[key] != reference[key]]
+            raise SystemExit(f"Runs are not comparable ({changed}): {manifest_file}. "
+                             "Use a separate output root or --run-names for one experiment.")
+        reference = context
+        setting = (meta["stage"], meta["id_guidance_scale"], meta["id_weight"])
+        if setting in settings:
+            raise SystemExit(f"Duplicate sweep setting: {setting}")
+        settings.add(setting)
+        runs.append((manifest_file, meta, images))
+    if not runs:
+        raise SystemExit("No completed runs to evaluate")
+    return runs
+
+
 def main():
     args = parse_args()
+    runs = collect_runs(args.output_root, args.ffhq_base, args.run_names)
     from insightface.app import FaceAnalysis
     import face_alignment
 
@@ -75,17 +131,7 @@ def main():
     source_embeddings = {}
     target_landmarks = {}
     rows = []
-    manifests = sorted(args.output_root.glob("*/manifest.json"))
-    if not manifests:
-        raise SystemExit(f"No run manifests in {args.output_root}")
-
-    for manifest_file in manifests:
-        meta = json.loads(manifest_file.read_text(encoding="utf-8"))
-        if meta.get("status") != "complete":
-            print(f"Skipping unfinished run: {manifest_file}")
-            continue
-        images_dir = manifest_file.parent / "images"
-        generated = sorted(images_dir.glob("*.png"))
+    for manifest_file, meta, generated in runs:
         print(f"Scoring {manifest_file.parent.name}: {len(generated)} images", flush=True)
         for image in generated:
             pair_id = image.stem

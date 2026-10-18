@@ -1,0 +1,35 @@
+digraph G {
+
+graph [rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.30", ranksep="0.48", fontname="DejaVu Sans", fontsize=22, fontcolor="#17243B", labelloc=t, labeljust=l, dpi=130];
+node [shape=box, style="rounded,filled", fillcolor="#F2F5F9", color="#CBD5E1", fontname="DejaVu Sans", fontsize=14, fontcolor="#17243B", margin="0.18,0.13", penwidth=1.1];
+edge [color="#64748B", arrowsize=0.75, penwidth=1.4, fontname="DejaVu Sans", fontsize=11, fontcolor="#475569"];
+
+label="1  /  TEACHER ARCHITECTURE\nSource identity + target appearance guide the generator";
+source [label="SOURCE IMAGE\nWhose identity?", fillcolor="#DBEAFE", color="#60A5FA"];
+target [label="TARGET IMAGE\nWhich pose and appearance?", fillcolor="#FEF3C7", color="#FBBF24"];
+{rank=same; source; target;}
+arc [label="InsightFace / ArcFace branch\n512-dimensional recognition vector", fillcolor="#EFF6FF"];
+prep [label="Align + parse face\nGrayscale face; whiten selected regions", fillcolor="#EFF6FF"];
+eva [label="EVA-CLIP vision encoder\nGlobal vector: 768 dimensions\nFive intermediate token sequences", fillcolor="#EFF6FF"];
+id [label="IDFormer\nFuse recognition + global EVA vector\nAttend to intermediate EVA features\nOutput: 32 identity tokens × 2048", fillcolor="#DBEAFE", color="#60A5FA"];
+cond [label="TARGET PREPROCESSING\nBlur facial region\nAdd face + iris landmarks", fillcolor="#FFFBEB"];
+vae [label="Frozen VAE encoder\nTarget condition tokens", fillcolor="#FEF3C7", color="#FBBF24"];
+source -> arc;
+source -> prep -> eva;
+arc -> id [label="512 features"];
+eva -> id [label="768 features + visual tokens"];
+target -> cond -> vae;
+subgraph cluster_flux {
+  label="FLUX + TEACHER LoRA"; fontsize=17; color="#A78BFA"; style="rounded"; bgcolor="#FAF8FF"; margin=18;
+  dual [label="19 dual-stream transformer blocks\nText and image streams interact", fillcolor="#EDE9FE", color="#A78BFA"];
+  single [label="38 single-stream transformer blocks\nCombined text + image tokens", fillcolor="#EDE9FE", color="#A78BFA"];
+  velocity [label="Output projection\nPredicted latent velocity", fillcolor="#EDE9FE", color="#A78BFA"];
+  dual -> single -> velocity;
+}
+other [label="OTHER INPUTS\nCurrent noisy latent + timestep\nText encoded with CLIP + T5", fillcolor="#F1F5F9"];
+vae -> dual [label="Image condition"];
+id -> dual [label="Identity cross-attention\nevery 2 blocks", color="#3B82F6"];
+id -> single [label="Identity cross-attention\nevery 4 blocks", color="#3B82F6"];
+other -> dual;
+
+}

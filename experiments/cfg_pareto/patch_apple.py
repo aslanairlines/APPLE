@@ -5,7 +5,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "pulid_omini_inference_ffhq_args_multigpu.py"
-MARKER = "# CFG_PARETO_PATCH_V1"
+MARKER = "# CFG_PARETO_PATCH_V2"
+LEGACY_MARKER = "# CFG_PARETO_PATCH_V1"
 
 
 def replace_once(content: str, old: str, new: str) -> str:
@@ -15,14 +16,7 @@ def replace_once(content: str, old: str, new: str) -> str:
     return content.replace(old, new, 1)
 
 
-def main() -> None:
-    if not SCRIPT.is_file():
-        raise FileNotFoundError(f"Cannot find APPLE inference script: {SCRIPT}")
-    text = SCRIPT.read_text(encoding="utf-8")
-    if MARKER in text:
-        print("Patch already installed:", SCRIPT)
-        return
-
+def patch_controls(text: str) -> str:
     text = replace_once(text, "import os\n", f"{MARKER}\nimport os\nimport zlib\n")
     text = replace_once(
         text,
@@ -69,10 +63,43 @@ def main() -> None:
         '    parser.add_argument("--seed", type=int, default=42)\n'
         '    parser.add_argument("--output_dir", type=str, default=None)',
     )
+    return text
+
+
+def main() -> None:
+    if not SCRIPT.is_file():
+        raise FileNotFoundError(f"Cannot find APPLE inference script: {SCRIPT}")
+    text = SCRIPT.read_text(encoding="utf-8")
+    if MARKER in text:
+        print("Patch already installed:", SCRIPT)
+        return
+    if LEGACY_MARKER in text:
+        text = replace_once(text, LEGACY_MARKER, MARKER)
+    else:
+        text = patch_controls(text)
+    text = replace_once(text, "import zlib\n", "import zlib\nimport random\nimport numpy as cfg_numpy\n")
+    text = replace_once(
+        text, "    torch.cuda.set_device(rank)\n",
+        "    torch.cuda.set_device(rank)\n"
+        "    random.seed(args.seed)\n"
+        "    cfg_numpy.random.seed(args.seed % (2**32))\n"
+        "    torch.manual_seed(args.seed)\n",
+    )
+    seed_line = "        pair_seed = (args.seed + zlib.crc32(src_num.encode('utf-8'))) % (2**32)"
+    text = replace_once(
+        text, seed_line,
+        seed_line + "\n"
+        "        # Also control VAE condition sampling, which uses the global RNG.\n"
+        "        random.seed(pair_seed)\n"
+        "        cfg_numpy.random.seed(pair_seed)\n"
+        "        torch.manual_seed(pair_seed)",
+    )
+    compile(text, str(SCRIPT), "exec")
 
     backup = ROOT / ".git" / "apple_inference_before_cfg_pareto.py"
     backup.parent.mkdir(parents=True, exist_ok=True)
-    backup.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    if not backup.exists():
+        backup.write_text(SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
     SCRIPT.write_text(text, encoding="utf-8")
     print(f"Patched: {SCRIPT}\nBackup: {backup}")
 

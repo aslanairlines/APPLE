@@ -1,0 +1,30 @@
+digraph G {
+
+graph [rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.30", ranksep="0.48", fontname="DejaVu Sans", fontsize=22, fontcolor="#17243B", labelloc=t, labeljust=l, dpi=130];
+node [shape=box, style="rounded,filled", fillcolor="#F2F5F9", color="#CBD5E1", fontname="DejaVu Sans", fontsize=14, fontcolor="#17243B", margin="0.18,0.13", penwidth=1.1];
+edge [color="#64748B", arrowsize=0.75, penwidth=1.4, fontname="DejaVu Sans", fontsize=11, fontcolor="#475569"];
+
+label="3  /  TESTING: FACE SWAPPING\nSource and target can show DIFFERENT people";
+source [label="SOURCE: ALICE\nIdentity to transfer", fillcolor="#DBEAFE", color="#60A5FA"];
+target [label="TARGET: BOB\nPose, expression, lighting, appearance", fillcolor="#FEF3C7", color="#FBBF24"];
+{rank=same; source; target;}
+id [label="ArcFace + EVA-CLIP → IDFormer\nAlice identity tokens", fillcolor="#DBEAFE", color="#60A5FA"];
+cond [label="Blur + face / iris landmarks\nVAE encoder → target condition", fillcolor="#FEF3C7", color="#FBBF24"];
+start [label="STARTING LATENT\nRandom Gaussian noise\nOR optional target inversion"];
+flux [label="TRAINED FLUX + TEACHER LoRA\nInputs: current latent, source identity,\ntarget condition, text and timestep\nWeights stay fixed", fillcolor="#EDE9FE", color="#A78BFA"];
+step [label="Predict velocity\nScheduler updates the latent", fillcolor="#EDE9FE", color="#A78BFA"];
+check [shape=diamond, style=filled, label="More steps?", fillcolor="#F1F5F9", margin="0.12,0.08"];
+decode [label="Frozen VAE decoder\nFinal latent → RGB image"];
+out [label="SWAPPED IMAGE\nAlice identity + Bob attributes\nIntended result", fillcolor="#DCFCE7", color="#4ADE80"];
+source -> id -> flux;
+target -> cond -> flux;
+start -> flux;
+flux -> step -> check;
+check -> flux [label="YES: repeat with updated latent\n28 generation steps by default", color="#7C3AED"];
+check -> decode [label="NO: finished"];
+decode -> out;
+note [shape=note, label="Optional inversion\nEncode original Bob image with VAE\nReverse flow using target condition\nUse resulting latent as the start", fillcolor="#FFFBEB", color="#FBBF24"];
+target -> note [style=dashed];
+note -> start [style=dashed];
+
+}

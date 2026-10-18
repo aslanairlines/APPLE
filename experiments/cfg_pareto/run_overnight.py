@@ -17,7 +17,8 @@ def main():
     p.add_argument("--ffhq-base", type=Path, required=True)
     p.add_argument("--checkpoint", type=Path, required=True)
     p.add_argument("--model-id", default="black-forest-labs/FLUX.1-Krea-dev")
-    p.add_argument("--condition-type", default="blur_landmark_iris")
+    p.add_argument("--condition-type", choices=["raw", "blur_landmark", "blur_landmark_iris", "mask_landmark_iris"],
+                   default="raw")
     p.add_argument("--cfg-scales", type=float, nargs="+", default=[1, 1.5, 2, 2.5, 3, 4, 5])
     p.add_argument("--fixed-weight", type=float, default=1.0)
     p.add_argument("--num-steps", type=int, default=28)
@@ -32,6 +33,8 @@ def main():
     data = args.ffhq_base.resolve()
     ckpt = args.checkpoint.resolve()
     out_root = args.output_root.resolve()
+    run_names = [f"cfg_cfg{cfg:g}_w{args.fixed_weight:g}_steps{args.num_steps}_seed{args.seed}"
+                 for cfg in args.cfg_scales]
     commands = [
         ("inference", [
             sys.executable, str(HERE / "run_sweep.py"),
@@ -45,12 +48,13 @@ def main():
         ]),
         ("evaluate", [
             sys.executable, str(HERE / "evaluate.py"), "--ffhq-base", str(data),
-            "--output-root", str(out_root), "--scores", str(HERE / "scores.csv"),
+            "--output-root", str(out_root), "--scores", str(out_root / "scores.csv"),
+            "--run-names", *run_names,
             "--device", args.eval_device,
         ]),
         ("plot", [
             sys.executable, str(HERE / "plot_pareto.py"),
-            "--scores", str(HERE / "scores.csv"), "--out-dir", str(HERE / "figures"),
+            "--scores", str(out_root / "scores.csv"), "--out-dir", str(out_root / "figures"),
         ]),
     ]
     for label, command in commands:
@@ -61,8 +65,8 @@ def main():
             continue
         subprocess.run(command, cwd=ROOT, check=True)
     if not args.dry_run:
-        print(f"\nExperiment completed. Summary: {HERE / 'figures/summary.csv'}", flush=True)
-        print(f"Trade-off plot: {HERE / 'figures/tradeoff.png'}", flush=True)
+        print(f"\nExperiment completed. Summary: {out_root / 'figures/summary.csv'}", flush=True)
+        print(f"Trade-off plot: {out_root / 'figures/tradeoff.png'}", flush=True)
 
 
 if __name__ == "__main__":

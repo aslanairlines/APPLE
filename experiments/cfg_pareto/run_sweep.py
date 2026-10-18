@@ -1,6 +1,8 @@
 """Inference-only CFG or PuLID scale sweep using official APPLE FFHQ code."""
 import argparse
+import hashlib
 import json
+import math
 import shlex
 import subprocess
 import sys
@@ -10,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "pulid_omini_inference_ffhq_args_multigpu.py"
 CONDITION_DIRS = {
+    "raw": "",
     "blur_landmark": "condition_blended_image_blurdownsample8_segGlass_landmark",
     "blur_landmark_iris": "condition_blended_image_blurdownsample8_segGlass_landmark_iris",
     "mask_landmark_iris": "condition_blended_image_mask_segGlass_landmark_iris",
@@ -23,7 +26,8 @@ def parse_args():
     parser.add_argument("--checkpoint", type=Path, required=True)
     parser.add_argument("--output-root", type=Path, default=ROOT / "experiments/cfg_pareto/outputs")
     parser.add_argument("--model-id", default="black-forest-labs/FLUX.1-Krea-dev")
-    parser.add_argument("--condition-type", choices=CONDITION_DIRS, default="blur_landmark_iris")
+    parser.add_argument("--condition-type", choices=CONDITION_DIRS, default="raw",
+                        help="raw = full target image (student default); blurred conditions are for the teacher")
     parser.add_argument("--cfg-scales", type=float, nargs="+", default=[1, 1.5, 2, 2.5, 3, 4, 5])
     parser.add_argument("--weight-scales", type=float, nargs="+", default=[0.5, 0.75, 1, 1.25, 1.5, 2])
     parser.add_argument("--fixed-cfg", type=float, default=1.0)
@@ -38,11 +42,22 @@ def parse_args():
 
 def main():
     args = parse_args()
+    if args.num_steps <= 0 or args.nproc <= 0 or args.max_pairs < 0:
+        raise SystemExit("num-steps and nproc must be positive; max-pairs must be nonnegative")
+    if args.stage == "cfg":
+        grid = [(scale, args.fixed_weight) for scale in args.cfg_scales]
+    else:
+        grid = [(args.fixed_cfg, weight) for weight in args.weight_scales]
+    if any(not math.isfinite(cfg) or not math.isfinite(weight) or cfg < 1 or weight < 0
+           for cfg, weight in grid):
+        raise SystemExit("Use finite id_guidance_scale >= 1 and id_weight >= 0")
+    if len(set(grid)) != len(grid):
+        raise SystemExit("Duplicate sweep settings are not allowed")
     if not SCRIPT.is_file():
         raise SystemExit(f"Missing script: {SCRIPT}")
     if not args.dry_run:
         script_text = SCRIPT.read_text(encoding="utf-8")
-        if "CFG_PARETO_PATCH_V1" not in script_text:
+        if "CFG_PARETO_PATCH_V2" not in script_text:
             raise SystemExit("Run `python experiments/cfg_pareto/patch_apple.py` first")
         if not args.checkpoint.exists():
             raise SystemExit(f"Checkpoint not found: {args.checkpoint}")
@@ -57,7 +72,7 @@ def main():
         if not (args.ffhq_base / "src").is_dir() or not (args.ffhq_base / "trg").is_dir():
             raise SystemExit("Dataset must have src/ and trg/ folders")
         condition_path = args.ffhq_base / "trg" / CONDITION_DIRS[args.condition_type]
-        if not condition_path.is_dir():
+        if args.condition_type != "raw" and not condition_path.is_dir():
             raise SystemExit(f"Preprocessed target conditions missing: {condition_path}")
         source_images = sorted((args.ffhq_base / "src").glob("*.jpg"))
         if args.max_pairs > 0 and len(source_images) < args.max_pairs:
@@ -72,26 +87,20 @@ def main():
             pair_id = src_path.stem
             if not (args.ffhq_base / "trg" / f"{pair_id}.jpg").is_file():
                 missing.append(f"missing target: {pair_id}.jpg")
-            if not any((condition_path / f"{pair_id}{ext}").is_file() for ext in (".png", ".jpg")):
+            if args.condition_type != "raw" and not any(
+                    (condition_path / f"{pair_id}{ext}").is_file() for ext in (".png", ".jpg")):
                 missing.append(f"missing condition: {pair_id}.png/.jpg")
         if missing:
             raise SystemExit(f"Invalid FFHQ pairs (showing 10/{len(missing)}): " + "; ".join(missing[:10]))
-        print(f"Preflight OK: {len(expected_ids)} paired images with target conditions", flush=True)
-    if args.num_steps <= 0 or args.nproc <= 0 or args.max_pairs < 0:
-        raise SystemExit("num-steps and nproc must be positive; max-pairs must be nonnegative")
-    if args.stage == "cfg":
-        grid = [(scale, args.fixed_weight) for scale in args.cfg_scales]
-    else:
-        grid = [(args.fixed_cfg, weight) for weight in args.weight_scales]
+        print(f"Preflight OK: {len(expected_ids)} paired images; condition={args.condition_type}", flush=True)
 
     for cfg, weight in grid:
-        if cfg < 1 or weight < 0:
-            raise SystemExit("Use id_guidance_scale >= 1 and id_weight >= 0")
         run_name = f"{args.stage}_cfg{cfg:g}_w{weight:g}_steps{args.num_steps}_seed{args.seed}"
         run_dir = args.output_root.resolve() / run_name
         images_dir = run_dir / "images"
         command = [
-            "torchrun", "--standalone", f"--nproc_per_node={args.nproc}", str(SCRIPT),
+            sys.executable, "-m", "torch.distributed.run", "--standalone",
+            f"--nproc_per_node={args.nproc}", str(SCRIPT),
             "--base_path", str(ROOT),
             "--ffhq_base_path", str(args.ffhq_base.resolve()),
             "--checkpoint_path", str(args.checkpoint.resolve()),
@@ -100,12 +109,14 @@ def main():
             "--image_guidance_scale", "1.0",
             "--id_guidance_scale", str(cfg),
             "--id_weight", str(weight),
-            "--condition_type", args.condition_type,
             "--num_inference_steps", str(args.num_steps),
             "--max_pairs", str(args.max_pairs),
             "--seed", str(args.seed),
             "--output_dir", str(images_dir),
         ]
+        # The official inference CLI uses condition_type=None for a full target image.
+        if args.condition_type != "raw":
+            command += ["--condition_type", args.condition_type]
         print("\n" + shlex.join(command), flush=True)
         if args.dry_run:
             continue
@@ -123,6 +134,8 @@ def main():
             "model_id": args.model_id,
             "ffhq_base": str(args.ffhq_base.resolve()),
             "condition_type": args.condition_type,
+            "pair_ids": sorted(expected_ids),
+            "inference_sha256": hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
             "command": command,
             "started_utc": datetime.now(timezone.utc).isoformat(),
             "status": "running",
@@ -132,14 +145,19 @@ def main():
             previous = json.loads(manifest.read_text(encoding="utf-8"))
             comparable = ["stage", "id_guidance_scale", "id_weight", "num_steps", "seed",
                           "checkpoint", "checkpoint_size", "checkpoint_mtime_ns", "model_id",
-                          "ffhq_base", "condition_type"]
+                          "ffhq_base", "condition_type", "inference_sha256"]
             mismatched = [key for key in comparable if previous.get(key) != metadata.get(key)]
             if mismatched:
                 raise SystemExit(f"Unsafe resume: existing {manifest} has different settings: {mismatched}")
+        elif any(images_dir.glob("*.png")):
+            raise SystemExit(f"Refusing outputs without a manifest: {images_dir}")
+        unexpected = {p.stem for p in images_dir.glob("*.png")} - expected_ids
+        if unexpected:
+            raise SystemExit(f"Output directory contains pairs outside this run: {sorted(unexpected)[:5]}")
         manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         with (run_dir / "run.log").open("a", encoding="utf-8") as log:
             result = subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=False)
-        metadata["status"] = "complete" if result.returncode == 0 else "failed"
+        metadata["status"] = "verifying" if result.returncode == 0 else "failed"
         metadata["returncode"] = result.returncode
         metadata["finished_utc"] = datetime.now(timezone.utc).isoformat()
         manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -158,6 +176,8 @@ def main():
                 f"missing={len(absent)} {absent[:5]}, extra={len(extra)} {extra[:5]}. "
                 "Do not evaluate mixed pair sets."
             )
+        metadata["status"] = "complete"
+        manifest.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
         print(f"Finished {run_name}: {len(produced_ids)} verified outputs", flush=True)
 
 

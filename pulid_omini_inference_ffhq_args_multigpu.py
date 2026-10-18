@@ -1,4 +1,8 @@
+# CFG_PARETO_PATCH_V2
 import os
+import zlib
+import random
+import numpy as cfg_numpy
 os.environ['HF_HUB_DISABLE_XET'] = '1'
 os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
 from transformer_flux_ca import FluxTransformer2DModelCA
@@ -25,6 +29,9 @@ def main(args):
     world_size = dist.get_world_size()
     device = f'cuda:{rank}'
     torch.cuda.set_device(rank)
+    random.seed(args.seed)
+    cfg_numpy.random.seed(args.seed % (2**32))
+    torch.manual_seed(args.seed)
 
     # Config
     guidance_scale= args.guidance_scale
@@ -102,7 +109,7 @@ def main(args):
     else:
         lora_file_path = f'{base_path}/runs/{run_name}/ckpt/{ckpt}/default.safetensors'
 
-    output_dir = f'{base_path}/results/{run_name}_ckpt{ckpt}_gs{guidance_scale}_imgGS{image_guidance_scale}_idGS{id_guidance_scale}/ffhq_eval/base'
+    output_dir = args.output_dir or f'{base_path}/results/{run_name}_ckpt{ckpt}_gs{guidance_scale}_imgGS{image_guidance_scale}_idGS{id_guidance_scale}/ffhq_eval/base'
 
     adapter_name = 'default'
     if rank == 0:
@@ -129,6 +136,8 @@ def main(args):
         os.makedirs(output_dir, exist_ok=True)
 
     src_img_path_list = sorted(glob(os.path.join(ffhq_base, 'src/*.jpg')))
+    if args.max_pairs > 0:
+        src_img_path_list = src_img_path_list[:args.max_pairs]
     src_img_path_list = src_img_path_list[rank::world_size]
     trg_img_path_base = os.path.join(ffhq_base, 'trg')
 
@@ -139,6 +148,11 @@ def main(args):
         use_true_cfg = True if true_cfg > 1.0 else False
 
         src_num = os.path.basename(src_img_path).split('.')[0]
+        pair_seed = (args.seed + zlib.crc32(src_num.encode('utf-8'))) % (2**32)
+        # Also control VAE condition sampling, which uses the global RNG.
+        random.seed(pair_seed)
+        cfg_numpy.random.seed(pair_seed)
+        torch.manual_seed(pair_seed)
         trg_img_path = os.path.join(trg_img_path_base, f"{src_num}.jpg")
         trg_img = Image.open(trg_img_path).convert('RGB').resize((512,512))
         # trg_img.save(f"{output_dir}/{src_num}_trg.png")
@@ -221,13 +235,16 @@ def main(args):
                 conditions=[condition],
                 height=512,
                 width=512,
-                generator=torch.Generator('cpu').manual_seed(0),
+                num_inference_steps=args.num_inference_steps,
+                generator=torch.Generator('cpu').manual_seed(pair_seed),
                 kv_cache=False,
                 id_embed=id_embeddings,
                 uncond_id_embed=uncond_id_embeddings,
                 guidance_scale=guidance_scale,
                 image_guidance_scale=image_guidance_scale,
                 id_guidance_scale=id_guidance_scale,
+                id_weight=args.id_weight,
+                uncond_id_weight=args.id_weight,
                 gaze_embed=gaze_embed,
             )
 
@@ -259,6 +276,11 @@ if __name__ == '__main__':
     parser.add_argument("--guidance_scale", type=float, default=1.0)
     parser.add_argument("--image_guidance_scale", type=float, default=1.0)
     parser.add_argument("--id_guidance_scale", type=float, default=1.0)
+    parser.add_argument("--id_weight", type=float, default=1.0)
+    parser.add_argument("--num_inference_steps", type=int, default=28)
+    parser.add_argument("--max_pairs", type=int, default=0, help="0 = all pairs")
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--use_gaze", action='store_true', help="Use gaze condition")
     parser.add_argument("--inverse_steps", type=int, default=28)
     parser.add_argument("--inverse_cond", type=str, default='noID_trgCond', help="Inverse condition type: ['trgID_trgCond', 'noID_trgCond', 'trgID_noCond', 'noID_noCond']")

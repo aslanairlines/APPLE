@@ -1,0 +1,32 @@
+digraph G {
+
+graph [rankdir=TB, bgcolor="white", pad="0.35", nodesep="0.30", ranksep="0.48", fontname="DejaVu Sans", fontsize=22, fontcolor="#17243B", labelloc=t, labeljust=l, dpi=130];
+node [shape=box, style="rounded,filled", fillcolor="#F2F5F9", color="#CBD5E1", fontname="DejaVu Sans", fontsize=14, fontcolor="#17243B", margin="0.18,0.13", penwidth=1.1];
+edge [color="#64748B", arrowsize=0.75, penwidth=1.4, fontname="DejaVu Sans", fontsize=11, fontcolor="#475569"];
+
+label="2  /  TEACHER TRAINING\nSource and target show the SAME person";
+source [label="SOURCE: ALICE\nPhoto 1", fillcolor="#DBEAFE", color="#60A5FA"];
+target [label="TARGET: ALICE\nPhoto 2 — the correct answer", fillcolor="#FEF3C7", color="#FBBF24"];
+{rank=same; source; target;}
+id [label="ArcFace + EVA-CLIP → IDFormer\nSource identity tokens\nUsually precomputed / cached", fillcolor="#DBEAFE", color="#60A5FA"];
+cond [label="Blur + face / iris landmarks\nFrozen VAE encoder\nTarget condition tokens", fillcolor="#FEF3C7", color="#FBBF24"];
+clean [label="Frozen VAE encoder\nClean target latent: z", fillcolor="#FEF3C7", color="#FBBF24"];
+noise [label="Sample noise ε and timestep t"];
+mix [label="Mix target latent with noise\nz_t = (1 − t) z + t ε"];
+flux [label="FLUX + TEACHER LoRA\nOne forward pass at sampled timestep\nAlso receives text embeddings + timestep", fillcolor="#EDE9FE", color="#A78BFA"];
+pred [label="Predicted velocity: v", fillcolor="#EDE9FE", color="#A78BFA"];
+fm [label="FLOW-MATCHING LOSS\nCompare v with ε − z", fillcolor="#FCE7F3", color="#F472B6"];
+est [label="Estimated clean image\nẑ = z_t − t v → VAE decoder"];
+aux [label="OPTIONAL AUXILIARY LOSSES\nIdentity: output vs source\nLPIPS: output vs original target\nApplied at selected timesteps", fillcolor="#FCE7F3", color="#F472B6"];
+loss [label="Total loss → backpropagation\nUpdate selected trainable weights", fillcolor="#DCFCE7", color="#4ADE80"];
+source -> id -> flux;
+target -> cond -> flux;
+target -> clean -> mix;
+noise -> mix -> flux;
+flux -> pred;
+pred -> fm;
+pred -> est -> aux;
+fm -> loss;
+aux -> loss;
+
+}
