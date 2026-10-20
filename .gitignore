@@ -17,3 +17,9 @@ ablation/
 reface_dataset/
 # *.pth
 *.npy
+# Local matched APPLE experiments and cached preprocessors
+experiments/cfg_pareto/data/
+experiments/cfg_pareto/outputs/
+facexlib/
+!experiments/cfg_pareto/run_matched.sh
+models/pulid_flux_*.safetensors

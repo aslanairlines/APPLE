@@ -1,4 +1,8 @@
-"""Quick, self-contained proxy evaluation for APPLE FFHQ swaps.
+"""Evaluate APPLE FFHQ swaps with either proxy or canonical ALADDIN metrics.
+
+Use --protocol canonical --canonical-eval /path/to/ALADDIN/eval with a
+prepare_matched_data.py input view to reuse the laboratory evaluator.
+The compatibility default --protocol proxy reports the following:
 
 Metrics:
  - id_similarity: cosine(InsightFace buffalo_l(source), buffalo_l(output)) [higher better]
@@ -20,6 +24,8 @@ def parse_args():
     p.add_argument("--ffhq-base", type=Path, required=True)
     p.add_argument("--output-root", type=Path, default=Path(__file__).resolve().parent / "outputs")
     p.add_argument("--scores", type=Path, default=Path(__file__).resolve().parent / "scores.csv")
+    p.add_argument("--protocol", choices=["proxy", "canonical"], default="proxy")
+    p.add_argument("--canonical-eval", type=Path, help="ALADDIN eval directory; required for canonical protocol")
     p.add_argument("--device", choices=["cuda", "cpu"], default="cuda")
     p.add_argument("--det-size", type=int, default=640)
     p.add_argument("--run-names", nargs="+", help="Score only these run directories; otherwise all completed runs")
@@ -116,6 +122,12 @@ def collect_runs(output_root: Path, ffhq_base: Path, run_names=None):
 def main():
     args = parse_args()
     runs = collect_runs(args.output_root, args.ffhq_base, args.run_names)
+    if args.protocol == "canonical":
+        if args.canonical_eval is None:
+            raise SystemExit("--canonical-eval is required for canonical scoring")
+        from evaluate_canonical import score_runs
+        score_runs(args, runs)
+        return
     from insightface.app import FaceAnalysis
     import face_alignment
 

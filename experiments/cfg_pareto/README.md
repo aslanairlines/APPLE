@@ -1,5 +1,10 @@
 # APPLE identity CFG / PuLID weight inference sweep
 
+For this machine, use [the experiment matched to ALADDIN](MATCHED_EXPERIMENT.md),
+which verifies the prior 1,000-pair dataset and runs canonical masked identity,
+HopeNet pose, and Deep3D expression scoring. The generic instructions below use
+the historical proxy evaluator.
+
 This is an **inference-only** experiment. It uses the official APPLE FFHQ inference script and fixed source/target pair filenames. No training is performed.
 
 It sweeps **`id_guidance_scale`**, keeping FLUX `guidance_scale=1`, image guidance at 1, and PuLID weight fixed. This is an additional experiment, not a reproduction of a CFG sweep reported in the paper. The default is **student inference with the full, sharp target image** (`--condition-type raw`).

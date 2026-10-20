@@ -86,19 +86,18 @@ def main(args):
 
     from pulid.utils import resize_numpy_image_long
     from flux.sampling import denoise, get_noise, get_schedule, prepare, unpack, prepare_img, prepare_txt
-    from diffusers import FluxPipeline
+    from diffusers import FluxPipeline, FlowMatchEulerDiscreteScheduler
     from pipeline_flux_ca import FluxPipelineCA
     from omini.pipeline.flux_omini import generate_ca, Condition, convert_to_condition, generate_ca_inv
 
 
-    flux = FluxPipeline.from_pretrained(model_id, 
-                                        transformer=transformer, 
-                                        vae=vae,
-                                        text_encoder=text_encoder,
-                                        tokenizer=tokenizer,
-                                        text_encoder_2=text_encoder_2,
-                                        tokenizer_2=tokenizer_2,
-                                        torch_dtype=weight_dtype).to(device)
+    # Components are already loaded above. Construct explicitly so a local
+    # component-only snapshot does not require a redundant model_index.json.
+    scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(model_id, subfolder="scheduler")
+    flux = FluxPipeline(scheduler=scheduler, transformer=transformer, vae=vae,
+                        text_encoder=text_encoder, tokenizer=tokenizer,
+                        text_encoder_2=text_encoder_2, tokenizer_2=tokenizer_2).to(device)
+
 
 
     if checkpoint_path:
@@ -114,7 +113,8 @@ def main(args):
     adapter_name = 'default'
     if rank == 0:
         print(f"Loading LoRA for adapter '{adapter_name}' from {lora_file_path}")
-    flux.load_lora_weights(lora_file_path, adapter_name=adapter_name)
+    flux.load_lora_weights(os.path.dirname(os.path.abspath(lora_file_path)),
+                           weight_name=os.path.basename(lora_file_path), adapter_name=adapter_name)
     if use_gaze:
         flux.transformer.gaze_ca.load_state_dict(torch.load(
             os.path.join(os.path.dirname(lora_file_path), 'gaze_ca.pth')    
