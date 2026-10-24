@@ -7,10 +7,10 @@ export EVAL_FFHQ_DIR=/home/coder/project/data/aladdin/data/FFHQ
 export EVAL_WEIGHTS_DIR=/home/coder/project/data/aladdin/eval_weights
 export OMP_NUM_THREADS=8
 DATA=experiments/cfg_pareto/data/aladdin_full_1000
-OUT=experiments/cfg_pareto/outputs/student_matched_full1000
+OUT=experiments/cfg_pareto/outputs/student_matched_cfg1p2
 EVAL_PY=/home/coder/project/.venv/bin/python
 # Pass coefficient values as positional arguments, e.g. bash run_matched.sh 1 2 3.
-if [ "$#" -eq 0 ]; then set -- 1 1.5 2 2.5 3 4 5; fi
+if [ "$#" -eq 0 ]; then set -- 1.2; fi
 .venv/bin/python experiments/cfg_pareto/prepare_matched_data.py \
   --aladdin-config /home/coder/project/outputs/pulid_scale_sweep/full_1000/config.json --destination "$DATA" --canonical-eval /home/coder/project/eval
 .venv/bin/python -u experiments/cfg_pareto/run_sweep.py \

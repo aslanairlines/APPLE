@@ -28,7 +28,7 @@ def parse_args():
     parser.add_argument("--model-id", default="black-forest-labs/FLUX.1-Krea-dev")
     parser.add_argument("--condition-type", choices=CONDITION_DIRS, default="raw",
                         help="raw = full target image (student default); blurred conditions are for the teacher")
-    parser.add_argument("--cfg-scales", type=float, nargs="+", default=[1, 1.5, 2, 2.5, 3, 4, 5])
+    parser.add_argument("--cfg-scales", type=float, nargs="+", default=[1.2,])
     parser.add_argument("--weight-scales", type=float, nargs="+", default=[0.5, 0.75, 1, 1.25, 1.5, 2])
     parser.add_argument("--fixed-cfg", type=float, default=1.0)
     parser.add_argument("--fixed-weight", type=float, default=1.0)
