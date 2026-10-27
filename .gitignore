@@ -22,4 +22,5 @@ experiments/cfg_pareto/data/
 experiments/cfg_pareto/outputs/
 facexlib/
 !experiments/cfg_pareto/run_matched.sh
+!experiments/cfg_pareto/run_pulid_matched.sh
 models/pulid_flux_*.safetensors
